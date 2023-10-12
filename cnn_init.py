@@ -14,13 +14,13 @@ os.environ['MASTER_PORT'] = '12355'  #
 dist.init_process_group(backend='nccl')
 
 
-def dataset(): 
-
-    data.load
-    data = 5
 
 
-    return data
+# Hardest model - CNN or BART
+
+# Overhead is GPU copying, so this would have to be copying memory of items, which would be nneded from each GPU. 
+
+
 
 
 
@@ -36,8 +36,6 @@ if USE_DISTRIBUTED:
     os.environ['MASTER_ADDR'] = 'localhost'  # IP address of the master node
     os.environ['MASTER_PORT'] = '12355'  # Any free port of your choice
     dist.init_process_group(backend='nccl')
-
-
 
 
 class CNN(nn.Module):
@@ -59,9 +57,13 @@ class CNN(nn.Module):
         x = self.fc2(x)
         return x
 
+#https://pytorch.org/tutorials/recipes/recipes/saving_and_loading_a_general_checkpoint.html
+
+
 model = CNN().to(torch.device("cuda:0"))
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
 
 train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transforms.ToTensor())
 if USE_DISTRIBUTED:
@@ -78,13 +80,17 @@ if USE_DISTRIBUTED:
 else:
     model = nn.DataParallel(model)
 
-def save_checkpoint(epoch, model, optimizer, filename=CHECKPOINT_PATH):
+
+# We would need to adjust this based on the gpu
+def save_checkpoint(epoch, model, optimizer, rank, filename=CHECKPOINT_PATH):
+    # Append rank to filename to prevent conflicts
+    filename_with_rank = f"{filename}_rank_{rank}.pt"
     state = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict()
     }
-    torch.save(state, filename)
+    torch.save(state, filename_with_rank)
 
 for epoch in range(10):
     if USE_DISTRIBUTED:
@@ -92,6 +98,7 @@ for epoch in range(10):
 
     running_loss = 0.0
     running_corrects = 0.0
+
     for inputs, labels in train_loader:
         inputs, labels = inputs.to(torch.device("cuda:0")), labels.to(torch.device("cuda:0"))
         optimizer.zero_grad()
@@ -110,8 +117,12 @@ for epoch in range(10):
     if DEBUG_FLAG:
         print('Epoch [{}/{}], Loss: {:.4f}, Acc: {:.4f}'.format(epoch + 1, 10, epoch_loss, epoch_acc))
 
+
+
+        ## This saves ecah checkpont. 
     if (epoch + 1) % CHECKPOINT_FREQUENCY == 0 or (MANUAL_CHECKPOINT and epoch == 9):
-        save_checkpoint(epoch, model, optimizer)
+        rank = dist.get_rank()  # Get current rank
+        save_checkpoint(epoch, model, optimizer, rank)
 
 
 def is_gpu_idle(threshold=20):  # Threshold is in percentage
@@ -122,14 +133,15 @@ def is_gpu_idle(threshold=20):  # Threshold is in percentage
     return False
 
 def log_gpu_usage(log_file_path="gpu_usage.log", duration=3600, interval=10):
+    
     """
     Log GPU usage to a file.
-    
     Parameters:
     - log_file_path (str): Path to the log file.
     - duration (int): Total duration for which GPU usage should be logged (in seconds).
     - interval (int): Time interval between successive logs (in seconds).
     """
+
     start_time = time.time()
     end_time = start_time + duration
     
