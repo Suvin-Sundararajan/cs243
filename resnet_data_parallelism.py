@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torchvision.models as models
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from torch.nn.parallel import DataParallel
+from torch.nn.parallel import DistributedDataParallel
 import torch.optim as optim
 from tqdm import tqdm
 import time
@@ -11,13 +11,17 @@ import datetime
 import sys
 from gemini_algos import placement_strategy
 from gemini_algos import checkpoint_partition
+import threading
+import copy
+
+lock = threading.Lock()
+
 # CALL THIS FUNCTION WHEN NEEDED AND WANTING TO TEST PARAMETERS
 
 # Variable to control checkpointing location
 save_checkpoint_to_cpu = True
 checkpoint_frequency = 2  # Checkpoint every 2 epochs
 print(placement_strategy(4,1))
-
 
 # Ensure CUDA is available
 assert(torch.cuda.is_available())
@@ -57,10 +61,29 @@ resnet50.fc = torch.nn.Linear(resnet50.fc.in_features, num_classes)
 # Move model to the device (GPU) and use DataParallel
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 resnet50.to(device)
-resnet50 = DataParallel(resnet50)
+resnet50 = DistributedDataParallel(resnet50)
 
 # Optimizer setup
 optimizer = optim.SGD(resnet50.parameters(), lr=0.01, momentum=0.9)
+
+checkpoint = None
+
+def send_checkpoint():
+    global checkpoint
+    while True:
+        # suppose for now that we are sending the checkpoint to another GPU every 5 seconds
+        # also suppose for now, that we don't need to partition the checkpoint because it is small enough
+        time.sleep(5)
+        with lock:
+            if checkpoint is not None:
+                print("Sending checkpoint")
+                # send checkpoint to another GPU
+                # TODO: IDKK
+                checkpoint = None
+
+
+checkpoint_thread = threading.Thread(target=send_checkpoint)
+checkpoint_thread.start()
 
 # Training loop setup
 num_epochs = 5  # Just an example, specify the number of epochs you want
@@ -71,26 +94,22 @@ if len(sys.argv) > 1:
         print("Usage: python script.py <number_of_epochs>")
         sys.exit(1)
 
-# Checkpointing frequency
-
-
 # Function to save the model and optimizer state
-# Function to save the model and optimizer state
-def save_checkpoint(model, optimizer, epoch, file_path='checkpoint.pth'):
-    # If saving to CPU, temporarily move the model to CPU
-    if save_checkpoint_to_cpu:
-        model_state = model.module.cpu().state_dict()
-        # Move model back to GPU after saving state
-        model.to(device)
-    else:
-        model_state = model.module.state_dict()
+# def save_checkpoint(model, optimizer, epoch, file_path='checkpoint.pth'):
+#     # If saving to CPU, temporarily move the model to CPU
+#     if save_checkpoint_to_cpu:
+#         model_state = model.module.cpu().state_dict()
+#         # Move model back to GPU after saving state
+#         model.to(device)
+#     else:
+#         model_state = model.module.state_dict()
 
-    state = {
-        'epoch': epoch,
-        'model_state': model_state,
-        'optimizer_state': optimizer.state_dict(),
-    }
-    torch.save(state, file_path)
+#     state = {
+#         'epoch': epoch,
+#         'model_state': model_state,
+#         'optimizer_state': optimizer.state_dict(),
+#     }
+#     torch.save(state, file_path)
 
 
 # Wrap trainloader with tqdm
@@ -130,10 +149,14 @@ for epoch in range(num_epochs):
     print(f"Epoch {epoch + 1} Total Idle Time: {epoch_idle_time} ")
 
     # Checkpointing logic
-    if (epoch + 1) % checkpoint_frequency == 0:
-        checkpoint_file = f'checkpoint_epoch_{epoch + 1}.pth'
-        save_checkpoint(resnet50, optimizer, epoch, file_path=checkpoint_file)
-        print(f"Checkpoint saved for epoch {epoch + 1}")
+    with lock:
+        # Create checkpoint
+        checkpoint = copy.deepcopy(resnet50.module.state_dict())
+
+    # if (epoch + 1) % checkpoint_frequency == 0:
+    #     checkpoint_file = f'checkpoint_epoch_{epoch + 1}.pth'
+    #     save_checkpoint(resnet50, optimizer, epoch, file_path=checkpoint_file)
+    #     print(f"Checkpoint saved for epoch {epoch + 1}")
 
 # Print total idle times
 total_idle_time = sum(idle_times)
