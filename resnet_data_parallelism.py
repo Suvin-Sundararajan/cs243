@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torchvision.models as models
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from torch.nn.parallel import DistributedDataParallel
+from torch.nn.parallel import DataParallel
 import torch.optim as optim
 from tqdm import tqdm
 import time
@@ -21,7 +21,8 @@ lock = threading.Lock()
 # Variable to control checkpointing location
 save_checkpoint_to_cpu = True
 checkpoint_frequency = 2  # Checkpoint every 2 epochs
-print(placement_strategy(4,1))
+checkpoint_groups = placement_strategy(4,1)
+print(checkpoint_groups)
 
 # Ensure CUDA is available
 assert(torch.cuda.is_available())
@@ -61,7 +62,7 @@ resnet50.fc = torch.nn.Linear(resnet50.fc.in_features, num_classes)
 # Move model to the device (GPU) and use DataParallel
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 resnet50.to(device)
-resnet50 = DistributedDataParallel(resnet50)
+resnet50 = DataParallel(resnet50)
 
 # Optimizer setup
 optimizer = optim.SGD(resnet50.parameters(), lr=0.01, momentum=0.9)
@@ -70,15 +71,24 @@ checkpoint = None
 
 def send_checkpoint():
     global checkpoint
+    gpu = 1
     while True:
         # suppose for now that we are sending the checkpoint to another GPU every 5 seconds
         # also suppose for now, that we don't need to partition the checkpoint because it is small enough
         time.sleep(5)
         with lock:
             if checkpoint is not None:
-                print("Sending checkpoint")
-                # send checkpoint to another GPU
-                # TODO: IDKK
+                # determine which GPUs to send the checkpoint to from the placement strategy
+                group = []
+                for i in range(len(checkpoint_groups)):
+                    if gpu in checkpoint_groups[i]:
+                        group = checkpoint_groups[i]
+                        break
+                
+                for gpu_id in group:
+                    if gpu_id != gpu:
+                        # this is wrong
+                        checkpoint.to(gpu_id)
                 checkpoint = None
 
 
