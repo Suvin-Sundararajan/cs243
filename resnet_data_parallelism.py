@@ -16,6 +16,9 @@ import copy
 
 lock = threading.Lock()
 
+use_big_resnet = False
+
+
 # CALL THIS FUNCTION WHEN NEEDED AND WANTING TO TEST PARAMETERS
 
 # Variable to control checkpointing location
@@ -55,17 +58,17 @@ trainset = datasets.CIFAR100(root='./data', train=True, download=True, transform
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=64, shuffle=True)
 
 # Initialize ResNet50 with pretrained weights
-resnet50 = models.resnet50(pretrained=True)
+resnet = models.resnet152(pretrained=True) if use_big_resnet else models.resnet50(pretrained=True)
 num_classes = 100  # CIFAR-100 has 100 classes
-resnet50.fc = torch.nn.Linear(resnet50.fc.in_features, num_classes)
+resnet.fc = torch.nn.Linear(resnet.fc.in_features, num_classes)
 
 # Move model to the device (GPU) and use DataParallel
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-resnet50.to(device)
-resnet50 = DataParallel(resnet50)
+resnet.to(device)
+resnet = DataParallel(resnet)
 
 # Optimizer setup
-optimizer = optim.SGD(resnet50.parameters(), lr=0.01, momentum=0.9)
+optimizer = optim.SGD(resnet.parameters(), lr=0.01, momentum=0.9)
 
 checkpoint = None
 
@@ -144,7 +147,7 @@ for epoch in range(num_epochs):
 
         optimizer.zero_grad()
         start_sync_time = time.time()  # Start idle time measurement
-        outputs = resnet50(inputs)
+        outputs = resnet(inputs)
         loss = F.cross_entropy(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -161,7 +164,7 @@ for epoch in range(num_epochs):
     # Checkpointing logic
     with lock:
         # Create checkpoint
-        checkpoint = copy.deepcopy(resnet50.module.state_dict())
+        checkpoint = copy.deepcopy(resnet.module.state_dict())
 
     # if (epoch + 1) % checkpoint_frequency == 0:
     #     checkpoint_file = f'checkpoint_epoch_{epoch + 1}.pth'
