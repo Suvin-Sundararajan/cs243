@@ -13,6 +13,8 @@ import datetime
 import sys
 import copy
 import threading
+from gemini_algos import placement_strategy
+from gemini_algos import checkpoint_partition
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = '[ADDR]'  # Change with ip address
@@ -66,13 +68,30 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
 
         # Checkpointing logic (only by rank 0)
         if rank == 0 and (epoch + 1) % checkpoint_frequency == 0:
-            checkpoint = {
-                'epoch': epoch + 1,
-                'model_state': resnet.module.state_dict(),
-                'optimizer_state': optimizer.state_dict(),
-            }
-            torch.save(checkpoint, f'checkpoint_epoch_{epoch + 1}.pth')
-            print(f"Checkpoint saved for epoch {epoch + 1}")
+            # make a copy of resnet.module and store it in cpu
+            model_copy = copy.deepcopy(resnet.module)
+            model_copy.cpu()
+
+            # make a copy of resnet.module and move it to the other gpus
+            group = []
+            for i in range(len(checkpoint_groups)):
+                if rank in checkpoint_groups[i]:
+                    group = checkpoint_groups[i]
+                    break
+            for gpu_id in group:
+                model_copy_gpu = copy.deepcopy(resnet.module)
+                if gpu_id != rank:
+                    model_copy_gpu.cuda(gpu_id)
+
+
+            # checkpoint = {
+            #     'epoch': epoch + 1,
+            #     'model_state': resnet.module.state_dict(),
+            #     'optimizer_state': optimizer.state_dict(),
+            # }
+
+            # torch.save(checkpoint, f'checkpoint_epoch_{epoch + 1}.pth')
+            # print(f"Checkpoint saved for epoch {epoch + 1}")
 
     if rank == 0:
         print("Training Complete")
@@ -90,7 +109,9 @@ if __name__ == "__main__":
     num_epochs = 5
     checkpoint_frequency = 2
     save_checkpoint_to_cpu = True
-    checkpoint_groups = [[0, 1], [2, 3]]  # Example groups
+
+    #TODO: change to call placement_strategy
+    checkpoint_groups = [[0, 1], [2, 3]]  
 
     if len(sys.argv) > 1:
         try:
@@ -98,6 +119,7 @@ if __name__ == "__main__":
         except ValueError:
             print("Usage: python script.py <number_of_epochs>")
             sys.exit(1)
+
 
     os.environ['NCCL_DEBUG'] = 'INFO'
     torch.multiprocessing.spawn(main,
