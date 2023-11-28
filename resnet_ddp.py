@@ -17,17 +17,18 @@ from gemini_algos import placement_strategy
 from gemini_algos import checkpoint_partition
 
 def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = '[ADDR]'  # Change with ip address
-    os.environ['MASTER_PORT'] = '29500'
+    os.environ['MASTER_ADDR'] = '3.12.150.213'  # Change with ip address
+    os.environ['MASTER_PORT'] = '12340'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    print("Rank successfully connected to the master node at ")
+    print("Rank successfully connected to the master node at " + os.environ['MASTER_ADDR'] + ":" + os.environ['MASTER_PORT'])
 
 def cleanup():
     dist.destroy_process_group()
 
 def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, checkpoint_groups):
+    print(f"Running basic DDP example on rank {rank} out of {world_size} processes")
     setup(rank, world_size)
-    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
+    device = torch.device(f"cuda:{0}" if torch.cuda.is_available() else "cpu")
 
     # Define a transform to normalize the data
     transform = transforms.Compose([
@@ -45,7 +46,9 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
     num_classes = 100  # CIFAR-100 has 100 classes
     resnet.fc = torch.nn.Linear(resnet.fc.in_features, num_classes)
     resnet.to(device)
-    resnet = DDP(resnet, device_ids=[rank])
+    print("ResNet initialized")
+    resnet = DDP(resnet)
+    print("DDP initialized")
 
     # Optimizer setup
     optimizer = optim.SGD(resnet.parameters(), lr=0.01, momentum=0.9)
@@ -68,20 +71,21 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
 
         # Checkpointing logic (only by rank 0)
         if rank == 0 and (epoch + 1) % checkpoint_frequency == 0:
+            continue
             # make a copy of resnet.module and store it in cpu
-            model_copy = copy.deepcopy(resnet.module)
-            model_copy.cpu()
+            # model_copy = copy.deepcopy(resnet.module)
+            # model_copy.cpu()
 
-            # make a copy of resnet.module and move it to the other gpus
-            group = []
-            for i in range(len(checkpoint_groups)):
-                if rank in checkpoint_groups[i]:
-                    group = checkpoint_groups[i]
-                    break
-            for gpu_id in group:
-                model_copy_gpu = copy.deepcopy(resnet.module)
-                if gpu_id != rank:
-                    model_copy_gpu.cuda(gpu_id)
+            # # make a copy of resnet.module and move it to the other gpus
+            # group = []
+            # for i in range(len(checkpoint_groups)):
+            #     if rank in checkpoint_groups[i]:
+            #         group = checkpoint_groups[i]
+            #         break
+            # for gpu_id in group:
+            #     model_copy_gpu = copy.deepcopy(resnet.module)
+            #     if gpu_id != rank:
+            #         model_copy_gpu.cuda(gpu_id)
 
 
             # checkpoint = {
@@ -99,16 +103,18 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
     cleanup()
 
 if __name__ == "__main__":
-    world_size = torch.cuda.device_count()
+    world_size = 2
+    # world_size = torch.cuda.device_count()
 
     # Check if the expected number of GPUs (4) is available
-    expected_gpu_count = 4
-    assert world_size == expected_gpu_count, f"Expected {expected_gpu_count} GPUs, but found {world_size}"
+    # expected_gpu_count = 1
+    # assert world_size == expected_gpu_count, f"Expected {expected_gpu_count} GPUs, but found {world_size}"
 
     use_big_resnet = False
     num_epochs = 5
     checkpoint_frequency = 2
     save_checkpoint_to_cpu = True
+    rank = 0
 
     #TODO: change to call placement_strategy
     checkpoint_groups = [[0, 1], [2, 3]]  
@@ -120,9 +126,15 @@ if __name__ == "__main__":
             print("Usage: python script.py <number_of_epochs>")
             sys.exit(1)
 
+    if len(sys.argv) > 2:
+        try:
+            rank = int(sys.argv[2])
+        except ValueError:
+            print("Usage: python script.py <number_of_epochs> <rank>")
+            sys.exit(1)
+    else:
+        print("Usage: python script.py <number_of_epochs> <rank>")
+        sys.exit(1)
 
     os.environ['NCCL_DEBUG'] = 'INFO'
-    torch.multiprocessing.spawn(main,
-                                args=(world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, checkpoint_groups),
-                                nprocs=world_size,
-                                join=True)
+    main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, checkpoint_groups)    
