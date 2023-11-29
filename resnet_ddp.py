@@ -19,6 +19,8 @@ from gemini_algos import checkpoint_partition
 
 model_chunks = [] 
 num_shards = 10
+# number of seconds to wait before sending the next chunk
+send_chunk_frequency = 5
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = '3.12.150.213'  # Change with ip address
@@ -67,7 +69,7 @@ def send_chunk():
             # TODO: Send to the other machine
             
         # Wait for 5 seconds
-        time.sleep(5)
+        time.sleep(send_chunk_frequency)
 
 def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu):
     print(f"Running basic DDP example on rank {rank} out of {world_size} processes")
