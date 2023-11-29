@@ -18,7 +18,7 @@ from gemini_algos import checkpoint_partition
 
 
 model_chunks = [] 
-num_shards = 10
+params_per_chunk = 2561000
 # number of seconds to wait before sending the next chunk
 send_chunk_frequency = 5
 
@@ -34,25 +34,20 @@ def cleanup():
 
 def shard_model(model):
     chunks = []
-    total_params = sum(p.numel() for p in state_dict.values())
-
-    # Calculate the number of parameters in each shard
-    params_per_shard = total_params // num_shards
-
-    # Initialize variables to keep track of the current shard and its parameters
-    current_shard = 0
-    current_shard_params = {}
-    for key, value in model.state_dict().items():
-        current_shard_params[key] = value
-        current_shard_size = sum(p.numel() for p in current_shard_params.values())
-    
-        # If the current shard size exceeds or equals the target size add it to the list of shards
-        if current_shard_size >= params_per_shard:
-            chunks.append(current_shard_params)
-            
-            # Move to the next shard
-            current_shard += 1
-            current_shard_params = {}
+    current_chunk = 0
+    current_chunk_params = {}
+    items = model.state_dict().items()
+    for i in range(len(items)):
+        key, value = list(items)[i]
+        current_chunk_size = sum(p.numel() for p in current_chunk_params.values())
+        if current_chunk_size + value.numel() < params_per_chunk:
+            current_chunk_params[key] = value
+        else:
+            chunks.append(current_chunk_params)
+            # Move to the next chunk
+            current_chunk += 1
+            current_chunk_params = {}
+            current_chunk_params[key] = value
     return chunks
         
     
@@ -118,7 +113,7 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
                 print(f"Epoch {epoch + 1}, Batch {i}, Loss: {loss.item()}")
 
         # Checkpointing logic (only by rank 0)
-        model_chunks.extend(shard_model(resnet.module))
+        model_chunks.extend(shard_model(resnet))
         model_copy = copy.deepcopy(resnet.module)
         model_copy.cpu()
 
