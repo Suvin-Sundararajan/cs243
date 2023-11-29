@@ -34,7 +34,6 @@ def cleanup():
 
 def shard_model(model):
     chunks = []
-    current_chunk = 0
     current_chunk_params = {}
     items = model.state_dict().items()
     for i in range(len(items)):
@@ -45,7 +44,6 @@ def shard_model(model):
         else:
             chunks.append(current_chunk_params)
             # Move to the next chunk
-            current_chunk += 1
             current_chunk_params = {}
             current_chunk_params[key] = value
     return chunks
