@@ -18,6 +18,7 @@ from gemini_algos import checkpoint_partition
 
 
 model_chunks = [] 
+num_shards = 10
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = '3.12.150.213'  # Change with ip address
@@ -30,8 +31,27 @@ def cleanup():
 
 
 def shard_model(model):
-    #TODO: Shard the model
-    pass
+    total_params = sum(p.numel() for p in state_dict.values())
+
+    # Calculate the number of parameters in each shard
+    params_per_shard = total_params // num_shards
+
+    # Initialize variables to keep track of the current shard and its parameters
+    current_shard = 0
+    current_shard_params = {}
+    for key, value in model.state_dict().items():
+        current_shard_params[key] = value
+        current_shard_size = sum(p.numel() for p in current_shard_params.values())
+    
+        # If the current shard size exceeds or equals the target size add it to the list of shards
+        if current_shard_size >= params_per_shard:
+            model_chunks.append(current_shard_params)
+            
+            # Move to the next shard
+            current_shard += 1
+            current_shard_params = {}
+        
+    
 
 def send_chunk():
     group = []
