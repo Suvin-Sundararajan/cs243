@@ -33,6 +33,7 @@ def cleanup():
 
 
 def shard_model(model):
+    chunks = []
     total_params = sum(p.numel() for p in state_dict.values())
 
     # Calculate the number of parameters in each shard
@@ -47,11 +48,12 @@ def shard_model(model):
     
         # If the current shard size exceeds or equals the target size add it to the list of shards
         if current_shard_size >= params_per_shard:
-            model_chunks.append(current_shard_params)
+            chunks.append(current_shard_params)
             
             # Move to the next shard
             current_shard += 1
             current_shard_params = {}
+    return chunks
         
     
 
