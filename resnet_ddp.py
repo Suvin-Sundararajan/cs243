@@ -50,7 +50,7 @@ def shard_model(model):
         
     
 
-def send_chunk():
+def send_chunk(rank):
     group = []
     for i in range(len(checkpoint_groups)):
         if rank in checkpoint_groups[i]:
@@ -62,6 +62,8 @@ def send_chunk():
             chunk = model_chunks.pop(0)
 
             # TODO: Send to the other machine
+            target_rank = 1 if rank == 0 else 0
+            dist.send(tensor=chunk, dst=target_rank)
             
         # Wait for 5 seconds
         time.sleep(send_chunk_frequency)
@@ -178,6 +180,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     os.environ['NCCL_DEBUG'] = 'INFO'
-    chunk_thread = threading.Thread(target=send_chunk)
+    chunk_thread = threading.Thread(target=send_chunk, args=(rank))
     chunk_thread.start()
     main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu)    
