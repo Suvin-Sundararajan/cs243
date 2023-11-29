@@ -16,6 +16,9 @@ import threading
 from gemini_algos import placement_strategy
 from gemini_algos import checkpoint_partition
 
+
+model_chunks = [] 
+
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = '3.12.150.213'  # Change with ip address
     os.environ['MASTER_PORT'] = '12340'
@@ -25,7 +28,28 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
-def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, checkpoint_groups):
+
+def shard_model(model):
+    #TODO: Shard the model
+    pass
+
+def send_chunk():
+    group = []
+    for i in range(len(checkpoint_groups)):
+        if rank in checkpoint_groups[i]:
+            group = checkpoint_groups[i]
+            break
+    while True:
+        if model_chunks:
+            # Get the first chunk
+            chunk = model_chunks.pop(0)
+
+            # TODO: Send to the other machine
+            
+        # Wait for 5 seconds
+        time.sleep(5)
+
+def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu):
     print(f"Running basic DDP example on rank {rank} out of {world_size} processes")
     setup(rank, world_size)
     device = torch.device(f"cuda:{0}" if torch.cuda.is_available() else "cpu")
@@ -70,22 +94,25 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
                 print(f"Epoch {epoch + 1}, Batch {i}, Loss: {loss.item()}")
 
         # Checkpointing logic (only by rank 0)
-        if rank == 0 and (epoch + 1) % checkpoint_frequency == 0:
-            continue
-            # make a copy of resnet.module and store it in cpu
+        model_chunks.extend(shard_model(resnet.module))
+        model_copy = copy.deepcopy(resnet.module)
+        model_copy.cpu()
+
+        # if rank == 0 and (epoch + 1) % checkpoint_frequency == 0:
+        #     # make a copy of resnet.module and store it in cpu
             # model_copy = copy.deepcopy(resnet.module)
             # model_copy.cpu()
 
-            # # make a copy of resnet.module and move it to the other gpus
-            # group = []
-            # for i in range(len(checkpoint_groups)):
-            #     if rank in checkpoint_groups[i]:
-            #         group = checkpoint_groups[i]
-            #         break
-            # for gpu_id in group:
-            #     model_copy_gpu = copy.deepcopy(resnet.module)
-            #     if gpu_id != rank:
-            #         model_copy_gpu.cuda(gpu_id)
+        #     # make a copy of resnet.module and move it to the other gpus
+        #     group = []
+        #     for i in range(len(checkpoint_groups)):
+        #         if rank in checkpoint_groups[i]:
+        #             group = checkpoint_groups[i]
+        #             break
+        #     for gpu_id in group:
+        #         model_copy_gpu = copy.deepcopy(resnet.module)
+        #         if gpu_id != rank:
+        #             model_copy_gpu.cuda(gpu_id)
 
 
             # checkpoint = {
@@ -116,9 +143,6 @@ if __name__ == "__main__":
     save_checkpoint_to_cpu = True
     rank = 0
 
-    #TODO: change to call placement_strategy
-    checkpoint_groups = [[0, 1], [2, 3]]  
-
     if len(sys.argv) > 1:
         try:
             num_epochs = int(sys.argv[1])
@@ -137,4 +161,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     os.environ['NCCL_DEBUG'] = 'INFO'
-    main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, checkpoint_groups)    
+    chunk_thread = threading.Thread(target=send_chunk)
+    chunk_thread.start()
+    main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu)    
