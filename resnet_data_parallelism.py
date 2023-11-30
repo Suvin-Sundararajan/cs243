@@ -99,7 +99,7 @@ checkpoint_thread = threading.Thread(target=send_checkpoint)
 checkpoint_thread.start()
 
 # Training loop setup
-num_epochs = 5  # Just an example, specify the number of epochs you want
+num_epochs = 20  # Just an example, specify the number of epochs you want
 if len(sys.argv) > 1:
     try:
         num_epochs = int(sys.argv[1])
@@ -134,6 +134,8 @@ update_interval = 60  # seconds
 idle_times = []
 
 for epoch in range(num_epochs):
+    # get start time of epoch
+    start_time = time.time()
     epoch_idle_time = 0.0
     for i, data in enumerate(trainloader):
         # Periodic update check
@@ -157,9 +159,10 @@ for epoch in range(num_epochs):
         # Update the progress bar
         trainloader.set_description(f"Epoch {epoch + 1}/{num_epochs}")
         trainloader.set_postfix(loss=loss.item())
-
+    # get end time of epoch
+    end_time = time.time()
     idle_times.append(epoch_idle_time)  # Accumulate idle time for each epoch
-    print(f"Epoch {epoch + 1} Total Idle Time: {epoch_idle_time} ")
+    print(f"Epoch {epoch + 1} Total Idle Time: {epoch_idle_time} Total Runtime: {end_time - start_time} ")
 
     # Checkpointing logic
     with lock:
