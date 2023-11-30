@@ -12,18 +12,19 @@ import time
 import datetime
 import sys
 import copy
-from multiprocessing import Process, Manager, set_start_method, Queue
+import threading
 from gemini_algos import placement_strategy
 from gemini_algos import checkpoint_partition
 
 
+model_chunks = [] 
 params_per_chunk = 2561000
 # number of seconds to wait before sending the next chunk
 send_chunk_frequency = 5
 
 def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = '18.220.20.182'  # Change with ip address
-    os.environ['MASTER_PORT'] = '12345'
+    os.environ['MASTER_ADDR'] = '3.12.150.213'  # Change with ip address
+    os.environ['MASTER_PORT'] = '12340'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     print("Rank successfully connected to the master node at " + os.environ['MASTER_ADDR'] + ":" + os.environ['MASTER_PORT'])
 
@@ -49,30 +50,25 @@ def shard_model(model):
         
     
 
-def send_chunk(rank, model_chunks):
-    print('Chunk sending process started')
-    setup(rank+2, 4)
-    print('Chunk sending process connected to the master node')
-
-   
+def send_chunk(rank):
+    group = []
+    for i in range(len(checkpoint_groups)):
+        if rank in checkpoint_groups[i]:
+            group = checkpoint_groups[i]
+            break
     while True:
-        if model_chunks.qsize() > 0:
-            print('Sending chunk to the other machine')
+        if model_chunks:
             # Get the first chunk
-            chunk = model_chunks.get()
+            chunk = model_chunks.pop(0)
 
             # TODO: Send to the other machine
             target_rank = 1 if rank == 0 else 0
-            chunk_tensor = torch.cat([value.flatten() for value in chunk.values()])
-            dist.send(tensor=chunk_tensor, dst=target_rank)
-            print('Chunk sent to rank ' + str(target_rank))
-        else:
-            print('No chunks to send. Waiting for ' + str(send_chunk_frequency) + ' seconds')
+            dist.send(tensor=chunk, dst=target_rank)
             
         # Wait for 5 seconds
         time.sleep(send_chunk_frequency)
 
-def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, model_chunks):
+def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu):
     print(f"Running basic DDP example on rank {rank} out of {world_size} processes")
     setup(rank, world_size)
     device = torch.device(f"cuda:{0}" if torch.cuda.is_available() else "cpu")
@@ -113,18 +109,39 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
             loss.backward()
             optimizer.step()
 
-            if i % 50 == 0:
+            if rank == 0 and i % 10 == 0:
                 print(f"Epoch {epoch + 1}, Batch {i}, Loss: {loss.item()}")
 
         # Checkpointing logic (only by rank 0)
-        chunks = shard_model(resnet)
-        for chunk in chunks:
-            model_chunks.put(chunk)
-        print('Model has been sharded into ' + str(len(chunks)) + ' chunks')
+        model_chunks.extend(shard_model(resnet))
         model_copy = copy.deepcopy(resnet.module)
         model_copy.cpu()
-        print('Model has been saved to local CPU')
 
+        # if rank == 0 and (epoch + 1) % checkpoint_frequency == 0:
+        #     # make a copy of resnet.module and store it in cpu
+            # model_copy = copy.deepcopy(resnet.module)
+            # model_copy.cpu()
+
+        #     # make a copy of resnet.module and move it to the other gpus
+        #     group = []
+        #     for i in range(len(checkpoint_groups)):
+        #         if rank in checkpoint_groups[i]:
+        #             group = checkpoint_groups[i]
+        #             break
+        #     for gpu_id in group:
+        #         model_copy_gpu = copy.deepcopy(resnet.module)
+        #         if gpu_id != rank:
+        #             model_copy_gpu.cuda(gpu_id)
+
+
+            # checkpoint = {
+            #     'epoch': epoch + 1,
+            #     'model_state': resnet.module.state_dict(),
+            #     'optimizer_state': optimizer.state_dict(),
+            # }
+
+            # torch.save(checkpoint, f'checkpoint_epoch_{epoch + 1}.pth')
+            # print(f"Checkpoint saved for epoch {epoch + 1}")
 
     if rank == 0:
         print("Training Complete")
@@ -132,8 +149,7 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
     cleanup()
 
 if __name__ == "__main__":
-    set_start_method('spawn')
-    world_size = 4
+    world_size = 2
     # world_size = torch.cuda.device_count()
 
     # Check if the expected number of GPUs (4) is available
@@ -164,15 +180,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     os.environ['NCCL_DEBUG'] = 'INFO'
-
-    with Manager() as manager:
-        # Create a shared list to store the chunks
-        model_chunks = Queue()
-        # Create a Process for sending chunks
-        chunk_process = Process(target=send_chunk, args=(rank, model_chunks))
-        chunk_process.start()
-
-        main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, model_chunks)   
-        
-        # Wait for the chunk sending process to finish
-        chunk_process.join() 
+    chunk_thread = threading.Thread(target=send_chunk, args=(rank))
+    chunk_thread.start()
+    main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu)    
