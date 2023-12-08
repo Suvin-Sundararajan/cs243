@@ -71,13 +71,12 @@ def shard_model(model, num_shards):
 
 def save_specific_shards(shards, shard_indices, saved_shards):
     for i in shard_indices:
-        if not saved_shards[i]:
-            filename = f"model_shard_{i}.pth"
-            torch.save(shards[i], filename)
-            saved_shards[i] = True  # Mark the shard as saved
-            print(f"Shard {i} saved as {filename}")
-        else:
-            print(f"Shard {i} already saved.")
+        
+        filename = f"model_shard_{i}.pth"
+        torch.save(shards[i], filename)
+        saved_shards[i] = True  # Mark the shard as saved
+        print(f"Shard {i} saved as {filename}")
+       
 
 
 
