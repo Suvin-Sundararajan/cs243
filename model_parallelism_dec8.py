@@ -38,6 +38,76 @@ def cleanup():
     dist.barrier() 
     dist.destroy_process_group()
 
+
+def shard_model(model, num_shards):
+    model_state = model.state_dict()
+    total_params = sum(p.numel() for p in model_state.values())
+    params_per_shard = total_params // num_shards
+    remaining_params = total_params % num_shards  # Handle any remainder
+
+    shards = []
+    current_chunk_params = {}
+    current_chunk_size = 0
+
+    for key, value in model_state.items():
+        if current_chunk_size + value.numel() > params_per_shard and len(shards) < num_shards - 1:
+            shards.append(current_chunk_params)
+            current_chunk_params = {}
+            current_chunk_size = 0
+
+        current_chunk_params[key] = value
+        current_chunk_size += value.numel()
+
+    # Add the last chunk (which may be slightly larger due to the remainder)
+    if current_chunk_params:
+        shards.append(current_chunk_params)
+
+    # Adjust the last shard size to include any remaining parameters
+    if remaining_params > 0 and shards:
+        last_shard_key, last_shard_value = list(shards[-1].items())[-1]
+        shards[-1][last_shard_key] = last_shard_value[:remaining_params]
+
+    return shards
+
+def save_specific_shards(shards, shard_indices, saved_shards):
+    for i in shard_indices:
+        if not saved_shards[i]:
+            filename = f"model_shard_{i}.pth"
+            torch.save(shards[i], filename)
+            saved_shards[i] = True  # Mark the shard as saved
+            print(f"Shard {i} saved as {filename}")
+        else:
+            print(f"Shard {i} already saved.")
+
+
+
+
+# Load the pretrained ResNet50 model
+model = models.resnet50(pretrained=True)
+model = torch.nn.DataParallel(model)
+
+
+# EXAMPLE
+
+
+
+num_shards = 5  # desired number of shards
+shards = shard_model(model, num_shards)
+saved_shards = [False] * num_shards
+
+# Save specific shards
+
+
+# Later, you can save the remaining shards
+
+
+# Check saved shards
+
+
+
+# Call the shard() function
+
+
 def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, checkpoint_groups):
     print(f"Running the basic Model Parallelism example on rank {rank} out of {world_size} processes")
     setup(rank, world_size)
@@ -86,7 +156,14 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
             loss = F.cross_entropy(outputs, labels)
             loss.backward()
             optimizer.step()
-
+            if epoch == 0 and rank == 0 :
+                print("SAVING ON MAIN)")
+                save_specific_shards(shards, [1, 2, 3], saved_shards)
+                print("Shards saved:", saved_shards)
+            if epoch == 1 and rank == 1:
+                print("SAVING")
+                save_specific_shards(shards, [4], saved_shards)
+                print("Shards saved:", saved_shards)
             if rank == 0 and i % 10 == 0:
                 print(f"Epoch {epoch + 1}, Batch {i}, Loss: {loss.item()}")
 
@@ -99,31 +176,6 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
 
     cleanup()
 
-
-params_per_chunk = 2561000
-def shard_model(model):
-    chunks = []
-    current_chunk_params = {}
-    items = model.state_dict().items()
-    for i in range(len(items)):
-        key, value = list(items)[i]
-        current_chunk_size = sum(p.numel() for p in current_chunk_params.values())
-        if current_chunk_size + value.numel() < params_per_chunk:
-            current_chunk_params[key] = value
-        else:
-            chunks.append(current_chunk_params)
-            # Move to the next chunk
-            current_chunk_params = {}
-            current_chunk_params[key] = value
-    return chunks
-
-# Load the pretrained ResNet50 model
-model = models.resnet50(pretrained=True)
-model = torch.nn.DataParallel(model)
-
-
-# Call the shard() function
-print(len(shard_model(model)))
 
 if __name__ == "__main__":
     world_size = 2
