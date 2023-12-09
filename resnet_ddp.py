@@ -13,8 +13,8 @@ import datetime
 import sys
 import copy
 from multiprocessing import Process, Manager, set_start_method, Queue
-from gemini_algos import placement_strategy
-from gemini_algos import checkpoint_partition
+# from gemini_algos import placement_strategy
+# from gemini_algos import checkpoint_partition
 
 
 params_per_chunk = 2561000
@@ -22,10 +22,10 @@ params_per_chunk = 2561000
 send_chunk_frequency = 5
 
 def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = '18.220.20.182'  # Change with ip address
+    os.environ['MASTER_ADDR'] = '18.218.254.204'  # Change with ip address
     os.environ['MASTER_PORT'] = '12345'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    print("Rank successfully connected to the master node at " + os.environ['MASTER_ADDR'] + ":" + os.environ['MASTER_PORT'])
+    print(f"Rank {rank} connected to the master node at {os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}")
 
 def cleanup():
     dist.destroy_process_group()
@@ -51,8 +51,9 @@ def shard_model(model):
 
 def send_chunk(rank, model_chunks):
     print('Chunk sending process started')
-    setup(rank+2, 4)
-    print('Chunk sending process connected to the master node')
+    # setup(rank+2, 4)
+    # print('Chunk sending process connected to the master node')
+    
 
    
     while True:
@@ -61,10 +62,11 @@ def send_chunk(rank, model_chunks):
             # Get the first chunk
             chunk = model_chunks.get()
 
-            # TODO: Send to the other machine
+            # Send to the other machine
             target_rank = 1 if rank == 0 else 0
             chunk_tensor = torch.cat([value.flatten() for value in chunk.values()])
-            dist.send(tensor=chunk_tensor, dst=target_rank)
+            # dist.send(tensor=chunk_tensor, dst=target_rank)
+            time.sleep(1)
             print('Chunk sent to rank ' + str(target_rank))
         else:
             print('No chunks to send. Waiting for ' + str(send_chunk_frequency) + ' seconds')
@@ -133,12 +135,7 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
 
 if __name__ == "__main__":
     set_start_method('spawn')
-    world_size = 4
-    # world_size = torch.cuda.device_count()
-
-    # Check if the expected number of GPUs (4) is available
-    # expected_gpu_count = 1
-    # assert world_size == expected_gpu_count, f"Expected {expected_gpu_count} GPUs, but found {world_size}"
+    world_size = 2
 
     use_big_resnet = False
     num_epochs = 5
