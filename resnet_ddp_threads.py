@@ -17,13 +17,14 @@ import threading
 # from gemini_algos import placement_strategy
 # from gemini_algos import checkpoint_partition
 
+stop_thread = False
 
 params_per_chunk = 2561000
 # number of seconds to wait before sending the next chunk
 send_chunk_frequency = 5
 
 def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = '18.218.254.204'  # Change with ip address
+    os.environ['MASTER_ADDR'] = '18.188.69.223'  # Change with ip address
     os.environ['MASTER_PORT'] = '12345'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     print(f"Rank {rank} connected to the master node at {os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}")
@@ -52,12 +53,9 @@ def shard_model(model):
 
 def send_chunk(rank, model_chunks):
     print('Chunk sending process started')
-    # setup(rank+2, 4)
-    # print('Chunk sending process connected to the master node')
-    
 
-   
-    while True:
+    global stop_thread
+    while not stop_thread or len(model_chunks) > 0:
         if len(model_chunks) > 0:
             print('Sending chunk to the other machine')
             # Get the first chunk
@@ -75,9 +73,20 @@ def send_chunk(rank, model_chunks):
         # Wait for 5 seconds
         time.sleep(send_chunk_frequency)
 
+def receive_chunk(rank):
+    print('Chunk receiving process started')
+
+    global stop_thread
+    while not stop_thread:
+        # Receive the chunk
+        chunk_tensor = torch.zeros(params_per_chunk).to('cuda')
+        source_rank = 1 if rank == 0 else 0
+        dist.recv(tensor=chunk_tensor, src=source_rank)
+        print('Chunk received from rank ' + str(source_rank))
+
+
 def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, model_chunks):
     print(f"Running basic DDP example on rank {rank} out of {world_size} processes")
-    setup(rank, world_size)
     device = torch.device(f"cuda:{0}" if torch.cuda.is_available() else "cpu")
 
     # Define a transform to normalize the data
@@ -117,7 +126,7 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
             optimizer.step()
 
             if i % 50 == 0:
-                print(f"Epoch {epoch + 1}, Batch {i}, Loss: {loss.item()}")
+              print(f"Epoch {epoch + 1}, Batch {i}, Loss: {loss.item()}")
 
         # Checkpointing logic (only by rank 0)
         chunks = shard_model(resnet)
@@ -129,6 +138,7 @@ def main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, sav
         print('Model has been saved to local CPU')
 
 
+    stop_thread = True
     if rank == 0:
         print("Training Complete")
 
@@ -166,11 +176,28 @@ if __name__ == "__main__":
     # with Manager() as manager:
     # Create a shared list to store the chunks
     model_chunks = []
-    # Create a thread to send the chunks to the other machine
-    chunk_thread = threading.Thread(target=send_chunk, args=(rank, model_chunks))
-    chunk_thread.start()
 
-    main(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, model_chunks)   
+    setup(rank, world_size)
+
+    stream1 = torch.cuda.Stream()
+    stream2 = torch.cuda.Stream()
+    stream3 = torch.cuda.Stream()
+
+    with torch.cuda.stream(stream1):
+        # Create a thread to send the chunks to the other machine
+        send_thread = threading.Thread(target=send_chunk, args=(rank, model_chunks))
+        send_thread.start()
+
+    with torch.cuda.stream(stream2):
+        receive_thread = threading.Thread(target=receive_chunk, args=(rank,))
+        receive_thread.start()
+
+    with torch.cuda.stream(stream3):
+        main_thread = threading.Thread(target=main, args=(rank, world_size, use_big_resnet, num_epochs, checkpoint_frequency, save_checkpoint_to_cpu, model_chunks))
+        main_thread.start()
+    
     
     # Wait for the chunk sending process to finish
-    chunk_thread.join()
+    main_thread.join()
+    send_thread.join()
+    receive_thread.join()
